@@ -18,12 +18,12 @@
 ##
 
 [Defines]
-  PLATFORM_NAME                  = AppPkg
+  PLATFORM_NAME                  = ThinkPwn
   PLATFORM_GUID                  = 0458dade-8b6e-4e45-b773-1b27cbda3e06
   PLATFORM_VERSION               = 0.01
   DSC_SPECIFICATION              = 0x00010006
-  OUTPUT_DIRECTORY               = Build/AppPkg
-  SUPPORTED_ARCHITECTURES        = IA32|X64|ARM|AARCH64
+  OUTPUT_DIRECTORY               = Build/ThinkPwn
+  SUPPORTED_ARCHITECTURES        = X64
   BUILD_TARGETS                  = DEBUG|RELEASE|NOOPT
   SKUID_IDENTIFIER               = DEFAULT
 
@@ -129,7 +129,7 @@
   #
   # 3-rd party applications
   #
-  Cr4sh/ThinkPwn/ThinkPwn.inf
+  ThinkPwn/ThinkPwn.inf
 
 #### Un-comment the following line to build Python.
 #  AppPkg/Applications/Python/PythonCore.inf
@@ -152,3 +152,17 @@
 ##############################################################################
 !include StdLib/StdLib.inc
 !include AppPkg/Applications/Sockets/Sockets.inc
+
+###################################################################################################
+#
+# BuildOptions Section - Define the module specific tool chain flags that should be used as
+#                        the default flags for a module. These flags are appended to any 
+#                        standard flags that are defined by the build process. They can be 
+#                        applied for any modules or only those modules with the specific 
+#                        module style (EDK or EDKII) specified in [Components] section.
+#
+###################################################################################################
+
+[BuildOptions]
+
+  XCODE:*_*_*_CC_FLAGS = $(BUILD_OPTIONS) -Wno-invalid-noreturn
