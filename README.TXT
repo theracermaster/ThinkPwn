@@ -55,6 +55,33 @@ The interesting fact -- vulnerable UEFI driver from their firmwares has differen
 
 ##########################################
 
+UPDATE FROM 06.07.2016:
+
+Japaneese researcher known as 173210 found vulnerable code in firmware of Fujitsu LIFEBOOK A574/H, other Fujitsu computers probably affected as well:
+
+https://twitter.com/173210/status/750565904111562752
+https://twitter.com/173210/status/750569389741731840
+
+##########################################
+
+UPDATE FROM 07.07.2016:
+
+Kasey Smith figured that Dell Latitude E6430 is also vulnerable, it means that other computers from Dell might be affected as well:
+
+https://twitter.com/Ziginox/status/750778513012043776
+
+##########################################
+
+UPDATE FROM 08.07.2016:
+
+Lenovo updated their advisory with product models information, tere's a quite lot of vulnerable machines from IdeaPad and ThinkPad lines:
+
+https://support.lenovo.com/my/en/solutions/LEN-8324
+
+Also, it seems that vulnerability is not present in Skylake based Lenovo computers.
+
+##########################################
+
 
 Vulnerable SMM callback code:
 
@@ -84,6 +111,8 @@ Vulnerable SMM callback code:
 
 
 Proof of concept exploit for this vulnerability is designed as UEFI application that runs from UEFI shell. It's also possible to exploit it from runing operating system but you have to implement your own EFI_BASE_PROTOCOL.Communicate() function.
+
+This exact PoC was designed only for Lenovo computers and it's a pure luck that it works anywhere else. If it will fail to exploit the vulnerability on any other vendor machine it doesn't mean that machine is not vulnerable, probably it just not supported by exploit.
 
 To build exploit from the source code on Windows with Visual Studio compiler you have to perform the following steps:
 
